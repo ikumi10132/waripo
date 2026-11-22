@@ -85,6 +85,15 @@ async function call<T>(routeKey: string, opts: { body?: unknown; id?: string; as
 }
 
 const kakeibo = () => tbl('kakeibo');
+/** 家計簿のカテゴリーを置く */
+const cat = (sub: string, id: string, name: string, parentId: string | null = null, order = 1) =>
+  kakeibo().set(`USER#${sub}|CAT#${id}`, { PK: `USER#${sub}`, SK: `CAT#${id}`, id, name, type: 'expense', parentId, icon: '🍽', color: '#E8A33D', order });
+const tx = (sub: string, rand: string, categoryId: string | null) =>
+  kakeibo().set(`USER#${sub}|TX#2026-11-14#${rand}`, {
+    PK: `USER#${sub}`, SK: `TX#2026-11-14#${rand}`, id: `2026-11-14_${rand}`, date: '2026-11-14', type: 'expense', amount: 1000,
+    categoryId, merchant: '店', memo: '', source: 'manual', confirmed: true, payment: 'applepay', createdAt: '',
+  });
+const theirTx = (entryId: string) => [...kakeibo().values()].find((x) => x.PK === 'USER#pt' && (x.split as { entryId?: string } | undefined)?.entryId === entryId)!;
 const pair = () => call('POST /api/pair', { body: { partnerEmail: 'Partner@Example.com' } });
 
 beforeEach(() => tables.clear());
@@ -117,7 +126,10 @@ test('家計簿の明細から割り勘: 自分の明細に印、相手の家計
     PK: 'USER#me', SK: 'TX#2026-11-14#abc', id: '2026-11-14_abc', date: '2026-11-14', type: 'expense', amount: 6001,
     categoryId: 'food-eatout', merchant: '居酒屋', memo: '', source: 'manual', confirmed: true, payment: 'applepay', createdAt: '',
   });
-  kakeibo().set('USER#pt|CAT#food-eatout', { PK: 'USER#pt', SK: 'CAT#food-eatout' });
+  cat('me', 'food-eatout', '外食', 'food');
+  cat('me', 'food', '食費');
+  cat('pt', 'food-eatout', '外食', 'food');
+  cat('pt', 'food', '食費');
 
   const r = await call<Entry>('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_abc' } });
   assert.equal(r.status, 201);
@@ -128,7 +140,7 @@ test('家計簿の明細から割り勘: 自分の明細に印、相手の家計
   const theirs = [...kakeibo().values()].find((x) => x.PK === 'USER#pt' && x.SK.startsWith('TX#'))!;
   assert.equal(theirs.amount, 3000);
   assert.equal(theirs.memo, 'waripoから自動登録');
-  assert.equal(theirs.confirmed, false);
+  assert.equal(theirs.confirmed, true); // カテゴリーが決まったので確認済み
   assert.equal(theirs.categoryId, 'food-eatout'); // 相手も同じカテゴリーを持っていた
 
   assert.equal((await call<Summary>('GET /api/summary')).body.balance, 3000);
@@ -173,4 +185,46 @@ test('入力のチェック', async () => {
   assert.equal((await call('POST /api/entries', { body: { type: 'settle', amount: 100, direction: 'x' } })).status, 400);
   assert.equal((await call('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-01-01_none' } })).status, 404);
   assert.equal((await call('DELETE /api/entries/{id}', { id: '2026-01-01_none' })).status, 404);
+});
+
+test('割り勘のカテゴリーを相手の家計簿にも付ける (同じ名前を使う / なければ親ごと作る / 作った後は連動しない)', async () => {
+  await pair();
+  cat('me', 'food', '食費');
+  cat('me', 'my-ramen', 'ラーメン', 'food', 5);
+  cat('me', 'hobby', '趣味');
+  cat('me', 'my-camp', 'キャンプ', 'hobby', 6);
+  cat('pt', 'pt-food', '食費', null, 3); // 相手は id が違う同じ名前の「食費」を持っている
+  cat('pt', 'pt-ramen', 'ﾗｰﾒﾝ', 'pt-food', 9); // 半角でも同じ名前として扱う
+
+  // 1) 同じ名前・同じ親のカテゴリーがあればそれを使う (新しく作らない)
+  tx('me', 'a1', 'my-ramen');
+  const r1 = await call<Entry>('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_a1' } });
+  assert.equal(r1.status, 201);
+  assert.equal(theirTx(r1.body.id).categoryId, 'pt-ramen');
+  assert.equal([...kakeibo().keys()].filter((k) => k.startsWith('USER#pt|CAT#')).length, 2);
+
+  // 2) 相手にないカテゴリーは、親ごと相手の家計簿に作る (名前・アイコン・色をコピーして末尾に)
+  tx('me', 'a2', 'my-camp');
+  const r2 = await call<Entry>('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_a2' } });
+  assert.equal(theirTx(r2.body.id).categoryId, 'my-camp');
+  assert.equal(theirTx(r2.body.id).confirmed, true);
+  const camp = kakeibo().get('USER#pt|CAT#my-camp')!;
+  const hobby = kakeibo().get('USER#pt|CAT#hobby')!;
+  assert.deepEqual([camp.name, camp.parentId, camp.icon, camp.color], ['キャンプ', 'hobby', '🍽', '#E8A33D']);
+  assert.deepEqual([hobby.name, hobby.parentId, hobby.order], ['趣味', null, 10]);
+  assert.equal(camp.order, 11);
+
+  // 3) 相手がカテゴリーの名前を変えていても、次は id で見つかるので作り直さない
+  kakeibo().get('USER#pt|CAT#my-camp')!.name = 'アウトドア';
+  tx('me', 'a3', 'my-camp');
+  const r3 = await call<Entry>('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_a3' } });
+  assert.equal(theirTx(r3.body.id).categoryId, 'my-camp');
+  assert.equal(kakeibo().get('USER#me|CAT#my-camp')!.name, 'キャンプ'); // 自分のカテゴリーは変わらない
+  assert.equal([...kakeibo().keys()].filter((k) => k.startsWith('USER#pt|CAT#')).length, 4);
+
+  // 4) 未分類の明細は、相手の家計簿でも未分類・未確認
+  tx('me', 'a4', null);
+  const r4 = await call<Entry>('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_a4' } });
+  assert.equal(theirTx(r4.body.id).categoryId, null);
+  assert.equal(theirTx(r4.body.id).confirmed, false);
 });

@@ -1,5 +1,6 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import * as db from './db.js';
+import { partnerCategoryId } from './kakeibo-category.js';
 import { balanceFor, groupsFromClaim, halfShare, isDate, parseYen, todayJst } from './logic.js';
 import type { Entry, Member, Pair, Summary } from './types.js';
 
@@ -86,8 +87,8 @@ async function createSplit(c: Ctx, b: Record<string, unknown>): Promise<Entry> {
       createdBy: c.me,
       createdAt: now,
     };
-    // 相手の家計簿に負担分。カテゴリーは、相手も同じカテゴリーを持っていればそれにする
-    const categoryId = tx.categoryId && (await db.hasKakeiboCategory(c.partner.sub, tx.categoryId)) ? tx.categoryId : null;
+    // 相手の家計簿に負担分。カテゴリーは自分の明細と同じもの (相手になければ相手の家計簿に作る)
+    const categoryId = share > 0 ? await partnerCategoryId(c.me, c.partner.sub, tx.categoryId) : null;
     const otherTxId =
       share > 0
         ? await db.createKakeiboTx(c.partner.sub, {

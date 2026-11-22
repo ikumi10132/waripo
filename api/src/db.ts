@@ -149,12 +149,56 @@ export async function getKakeiboTx(sub: string, id: string): Promise<KakeiboTx |
   return res.Item ? strip<KakeiboTx>(res.Item) : undefined;
 }
 
-export async function hasKakeiboCategory(sub: string, categoryId: string): Promise<boolean> {
-  const res = await doc.send(new GetCommand({ TableName: KAKEIBO_TABLE, Key: { PK: `USER#${sub}`, SK: `CAT#${categoryId}` } }));
-  return !!res.Item;
+/** 家計簿のカテゴリー (kakeibo の Category と同じ形) */
+export interface KakeiboCategory {
+  id: string;
+  name: string;
+  type: 'expense' | 'income';
+  parentId: string | null;
+  icon: string;
+  color: string;
+  order: number;
 }
 
-/** waripo から家計簿に明細を作る (「未確認」に入り、本人がカテゴリーを確かめる) */
+export async function getKakeiboCategory(sub: string, id: string): Promise<KakeiboCategory | undefined> {
+  const res = await doc.send(new GetCommand({ TableName: KAKEIBO_TABLE, Key: { PK: `USER#${sub}`, SK: `CAT#${id}` } }));
+  return res.Item ? strip<KakeiboCategory>(res.Item) : undefined;
+}
+
+export async function listKakeiboCategories(sub: string): Promise<KakeiboCategory[]> {
+  const items: Record<string, unknown>[] = [];
+  let start: Record<string, unknown> | undefined;
+  do {
+    const res = await doc.send(
+      new QueryCommand({
+        TableName: KAKEIBO_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': `USER#${sub}`, ':sk': 'CAT#' },
+        ExclusiveStartKey: start,
+      }),
+    );
+    items.push(...(res.Items ?? []));
+    start = res.LastEvaluatedKey;
+  } while (start);
+  return items.map((i) => strip<KakeiboCategory>(i));
+}
+
+/** 相手の家計簿にカテゴリーを作る (同じ id がすでにあれば上書きしない) */
+export async function putKakeiboCategory(sub: string, c: KakeiboCategory): Promise<void> {
+  await doc
+    .send(
+      new PutCommand({
+        TableName: KAKEIBO_TABLE,
+        Item: { PK: `USER#${sub}`, SK: `CAT#${c.id}`, ...c },
+        ConditionExpression: 'attribute_not_exists(PK)',
+      }),
+    )
+    .catch((e: Error) => {
+      if (e.name !== 'ConditionalCheckFailedException') throw e;
+    });
+}
+
+/** waripo から家計簿に明細を作る (メモ「waripoから自動登録」) */
 export async function createKakeiboTx(
   sub: string,
   t: Pick<KakeiboTx, 'date' | 'amount' | 'categoryId' | 'merchant' | 'split'>,
@@ -170,7 +214,8 @@ export async function createKakeiboTx(
     merchant: t.merchant,
     memo: 'waripoから自動登録',
     source: 'waripo',
-    confirmed: false,
+    // カテゴリーが決まっていれば確認済み (家計簿の店名ルールで決まったときと同じ扱い)。決まらなければ「未確認」に入る
+    confirmed: t.categoryId !== null,
     split: t.split,
     createdAt: new Date().toISOString(),
   };

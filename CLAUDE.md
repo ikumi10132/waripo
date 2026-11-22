@@ -84,6 +84,7 @@ Constraints for each level:
 - 記録はすべて「from が to にお金を貸した」形。split は share (相手の負担)、settle / initial は amount。残高 = 自分が from の合計 − 自分が to の合計 (正なら相手が自分に借りている)
 - 家計簿との連動: kakeibo が SSM `/wakalabo/kakeibo/table-name` と `/table-arn` に置いた値を読み、kakeibo のテーブルに直接書く。
   払った人の明細に `split` を付け (自分の負担 = 金額 − 相手の負担)、相手の家計簿に負担分をメモ「waripoから自動登録」で作る。割り勘を消すと元に戻す
+  相手の明細のカテゴリーは api/src/kakeibo-category.ts で決める (同じ id → 同じ名前・同じ親 → なければ相手の家計簿に作る)。作った後は連動しない
 - API は CloudFront の `/api/*` から API Gateway に流す。kakeibo の画面は固定の `https://waripo.wakalabo.net/api` を呼ぶ (デプロイ順の循環を避けるため)
 - デプロイはユーザーが AWS CloudShell で README のコマンドを貼り付けて行う (GitHub の OIDC 連携は SCP で禁止)。kakeibo を先にデプロイしておく
 - リポジトリは公開。メールアドレスなどの個人情報や秘密情報は置かない
