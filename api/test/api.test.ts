@@ -245,3 +245,37 @@ test('予期しないエラーでは、AWS の内部の情報を画面に返さ�
     proto.send = original;
   }
 });
+
+test('割り勘にすると、相手の iPhone に通知する (相手が通知をオフにしていれば送らない)', async () => {
+  const { setSender } = await import('../src/push.js');
+  const sent: { endpoint: string; body: string }[] = [];
+  setSender(async (sub, payload) => {
+    sent.push({ endpoint: sub.endpoint, body: (JSON.parse(payload) as { body: string }).body });
+    return { statusCode: 201 };
+  });
+  await pair();
+  // 家計簿の API が作った鍵と、相手の端末の登録
+  kakeibo().set('SYSTEM|VAPID', { PK: 'SYSTEM', SK: 'VAPID', publicKey: 'pub', privateKey: 'priv' });
+  kakeibo().set('USER#pt|PUSH#1', { PK: 'USER#pt', SK: 'PUSH#1', endpoint: 'https://web.push.apple.com/pt', keys: { p256dh: 'p', auth: 'a' } });
+
+  tx('me', 'n1', null);
+  await call('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_n1' } });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.endpoint, 'https://web.push.apple.com/pt');
+  assert.match(sent[0]!.body, /alice が「店」を割り勘にしました。あなたの負担 ¥500 を家計簿に記録しました/);
+
+  // 相手が払った割り勘 (waripo で直接入力)
+  await call('POST /api/entries', { body: { type: 'split', payer: 'partner', amount: 4000, title: 'スーパー' } });
+  assert.match(sent[1]!.body, /alice が「スーパー」\(¥4,000\) を割り勘にしました。alice の負担は ¥2,000 です/);
+
+  // 家計簿に記録しない割り勘・精算は通知しない
+  await call('POST /api/entries', { body: { type: 'split', amount: 100, syncKakeibo: false } });
+  await call('POST /api/entries', { body: { type: 'settle', amount: 100, direction: 'toMe' } });
+  assert.equal(sent.length, 2);
+
+  // 相手が通知をオフにしている
+  kakeibo().set('USER#pt|NOTIFY', { PK: 'USER#pt', SK: 'NOTIFY', settings: { mail: true, waripo: false } });
+  tx('me', 'n2', null);
+  await call('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_n2' } });
+  assert.equal(sent.length, 2);
+});

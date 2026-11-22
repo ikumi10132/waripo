@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import * as db from './db.js';
 import { partnerCategoryId } from './kakeibo-category.js';
-import { balanceFor, groupsFromClaim, halfShare, isDate, parseYen, todayJst } from './logic.js';
+import { pushStore } from './push.js';
+import { balanceFor, groupsFromClaim, halfShare, isDate, parseYen, todayJst, yen } from './logic.js';
 import type { Entry, Member, Pair, Summary } from './types.js';
 
 /** W-SSO のグループ。このグループの人 (と管理者) だけが waripo を使える */
@@ -48,6 +49,21 @@ interface Ctx {
   me: string;
   pair: Pair;
   partner: Member;
+}
+
+// 通知 (Web プッシュ)。端末の登録と通知の設定は家計簿のテーブルにある
+const push = pushStore(process.env.KAKEIBO_TABLE ?? 'kakeibo');
+const KAKEIBO_URL = 'https://kakeibo.wakalabo.net/';
+const nameOf = (m?: Member) => (m ? m.email.split('@')[0]! : '相手');
+
+/** 相手の家計簿に割り勘の明細を入れたことを、相手の iPhone に知らせる (相手が設定でオフにしていれば送らない) */
+async function notifyPartner(c: Ctx, entry: Entry): Promise<void> {
+  const me = nameOf(c.pair.members.find((m) => m.sub === c.me));
+  const partnerPaid = entry.from === c.partner.sub;
+  const body = partnerPaid
+    ? `${me} が「${entry.title}」(${yen(entry.amount)}) を割り勘にしました。${me} の負担は ${yen(entry.share ?? 0)} です`
+    : `${me} が「${entry.title}」を割り勘にしました。あなたの負担 ${yen(entry.share ?? 0)} を家計簿に記録しました`;
+  await push.notify(c.partner.sub, 'waripo', { title: 'waripo', body, url: KAKEIBO_URL, tag: entry.id });
 }
 
 async function requirePair(me: string): Promise<Ctx> {
@@ -102,6 +118,7 @@ async function createSplit(c: Ctx, b: Record<string, unknown>): Promise<Entry> {
     entry.kakeibo = { payerTxId: tx.id, payerCreated: false, otherTxId };
     await db.putEntry(c.pair.id, entry);
     await db.setKakeiboSplit(c.me, tx.id, { entryId: entry.id, role: 'payer', otherShare: share });
+    if (otherTxId) await notifyPartner(c, entry);
     return entry;
   }
 
@@ -142,6 +159,7 @@ async function createSplit(c: Ctx, b: Record<string, unknown>): Promise<Entry> {
     entry.kakeibo = { payerTxId, payerCreated: true, otherTxId };
   }
   await db.putEntry(c.pair.id, entry);
+  if (entry.kakeibo) await notifyPartner(c, entry);
   return entry;
 }
 
