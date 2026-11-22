@@ -262,7 +262,7 @@ test('割り勘にすると、相手の iPhone に通知する (相手が通知�
   await call('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_n1' } });
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.endpoint, 'https://web.push.apple.com/pt');
-  assert.match(sent[0]!.body, /alice が「店」を割り勘にしました。あなたの負担 ¥500 を家計簿に記録しました/);
+  assert.match(sent[0]!.body, /alice が「店」を割り勘にしました。あなたの負担 ¥500 を MyKakeibo! に記録しました/);
 
   // 相手が払った割り勘 (waripo で直接入力)
   await call('POST /api/entries', { body: { type: 'split', payer: 'partner', amount: 4000, title: 'スーパー' } });

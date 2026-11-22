@@ -113,8 +113,8 @@ export function SplitForm({ partner, onClose, onDone, onError }: Common) {
       </label>
       <label className="switch-row advance-box">
         <span>
-          <strong>家計簿にも記録する</strong>
-          <span className="muted small"> 2 人の家計簿に、それぞれの分を入れます</span>
+          <strong>MyKakeibo! にも記録する</strong>
+          <span className="muted small"> 2 人の MyKakeibo! に、それぞれの分を入れます</span>
         </span>
         <input type="checkbox" role="switch" checked={sync} onChange={(e) => setSync(e.target.checked)} />
       </label>
@@ -156,7 +156,7 @@ export function SettleForm({ partner, balance, onClose, onDone, onError }: Commo
           <input className="input" inputMode="numeric" value={fmt(amount)} onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ''))} />
         </div>
       </label>
-      <p className="muted small">今の残高ぶんが最初から入っています。一部だけ返したときは金額を変えてください。精算は家計簿には記録しません（支出ではなく貸し借りの清算のため）。</p>
+      <p className="muted small">今の残高ぶんが最初から入っています。一部だけ返したときは金額を変えてください。精算は MyKakeibo! には記録しません（支出ではなく貸し借りの清算のため）。</p>
     </Sheet>
   );
 }

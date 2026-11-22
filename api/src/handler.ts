@@ -62,7 +62,7 @@ async function notifyPartner(c: Ctx, entry: Entry): Promise<void> {
   const partnerPaid = entry.from === c.partner.sub;
   const body = partnerPaid
     ? `${me} が「${entry.title}」(${yen(entry.amount)}) を割り勘にしました。${me} の負担は ${yen(entry.share ?? 0)} です`
-    : `${me} が「${entry.title}」を割り勘にしました。あなたの負担 ${yen(entry.share ?? 0)} を家計簿に記録しました`;
+    : `${me} が「${entry.title}」を割り勘にしました。あなたの負担 ${yen(entry.share ?? 0)} を MyKakeibo! に記録しました`;
   await push.notify(c.partner.sub, 'waripo', { title: 'waripo', body, url: KAKEIBO_URL, tag: entry.id });
 }
 
@@ -84,7 +84,7 @@ async function createSplit(c: Ctx, b: Record<string, unknown>): Promise<Entry> {
   if (kakeiboTxId) {
     // 家計簿の明細から: 払ったのは自分
     const tx = await db.getKakeiboTx(c.me, kakeiboTxId);
-    if (!tx) throw new HttpError(404, '家計簿の明細が見つかりません');
+    if (!tx) throw new HttpError(404, 'MyKakeibo! の明細が見つかりません');
     if (tx.type !== 'expense') throw new HttpError(400, '支出の明細だけ割り勘にできます');
     if (tx.split) throw new HttpError(400, 'この明細はすでに割り勘にしています');
     if (tx.advance) throw new HttpError(400, '立て替えの明細は割り勘にできません。立て替えをオフにしてから割り勘にしてください');
@@ -94,7 +94,7 @@ async function createSplit(c: Ctx, b: Record<string, unknown>): Promise<Entry> {
       id: newEntryId(tx.date),
       type: 'split',
       date: tx.date,
-      title: tx.merchant || tx.memo || '家計簿の明細',
+      title: tx.merchant || tx.memo || 'MyKakeibo! の明細',
       memo: str(b.memo, 300),
       from: c.me,
       to: c.partner.sub,

@@ -174,7 +174,7 @@ function Home({ data, onModal }: { data: Summary; onModal: (m: Modal) => void })
 
       {data.entries.length === 0 && (
         <section className="card">
-          <p className="muted">まだ記録がありません。「割り勘を追加」か、家計簿の明細の「waripoで割り勘」から始めてください。</p>
+          <p className="muted">まだ記録がありません。「割り勘を追加」か、MyKakeibo! の明細の「waripo で割り勘」から始めてください。</p>
           <p className="muted small">Warica などの残高を引き継ぐときは、設定の「最初の残高」から入れてください。</p>
         </section>
       )}
@@ -207,7 +207,7 @@ function EntryRow({ me, partnerName, entry: e, onClick }: { me: string; partnerN
           <span className="tx-title">{e.title}</span>
           <span className="tx-meta">
             {dateLabel(e.date)}・{describe(me, partnerName, e)}
-            {e.kakeibo && <span className="tag" style={{ marginLeft: 6 }}>家計簿</span>}
+            {e.kakeibo && <span className="tag" style={{ marginLeft: 6 }}>MyKakeibo!</span>}
           </span>
         </span>
         <span className={`num tx-amount ${eff > 0 ? 'income' : eff < 0 ? 'warn' : ''}`}>
@@ -230,7 +230,7 @@ function EntryDetail({ data, entry: e, onClose, onDone, onError }: {
   const pName = nameOf(data.partner);
   const mine = myShare(me, e);
   const remove = async () => {
-    if (!confirm(`この記録を削除しますか？${e.kakeibo ? '\n家計簿の明細も元に戻します (waripo が作った明細は削除します)。' : ''}`)) return;
+    if (!confirm(`この記録を削除しますか？${e.kakeibo ? '\nMyKakeibo! の明細も元に戻します (waripo が作った明細は削除します)。' : ''}`)) return;
     setBusy(true);
     try {
       await api.deleteEntry(e.id);
@@ -255,7 +255,7 @@ function EntryDetail({ data, entry: e, onClose, onDone, onError }: {
           {e.type === 'split' && (<><dt>{pName} の負担</dt><dd>{yen(e.amount - (mine ?? 0))}</dd></>)}
           {e.type !== 'split' && (<><dt>金額</dt><dd>{yen(e.amount)}</dd></>)}
           {e.memo && (<><dt>メモ</dt><dd>{e.memo}</dd></>)}
-          {e.kakeibo && (<><dt>家計簿</dt><dd>2 人の家計簿に記録済み</dd></>)}
+          {e.kakeibo && (<><dt>MyKakeibo!</dt><dd>2 人の MyKakeibo! に記録済み</dd></>)}
         </dl>
         <button className="btn btn-danger" onClick={() => void remove()} disabled={busy}>この記録を削除</button>
         <div className="sheet-foot"><button className="btn btn-block" onClick={onClose}>閉じる</button></div>
@@ -314,9 +314,9 @@ function Settings({ data, onModal }: { data: Summary; onModal: (m: Modal) => voi
         <button className="btn btn-outline" onClick={() => onModal('initial')}>最初の残高を入れる</button>
       </section>
       <section className="card">
-        <h2 className="card-title">家計簿との連動</h2>
+        <h2 className="card-title">MyKakeibo! との連動</h2>
         <p className="small">
-          家計簿の明細を開いて「waripoで割り勘」を押すと、ここに記録されます。あなたの家計簿は自分の負担分だけが支出になり、相手の家計簿には相手の負担分が「waripoから自動登録」として入ります（未確認に入るので、カテゴリーを確かめてください）。
+          MyKakeibo! で明細を記録するとき、または明細を開いて「waripo で割り勘」を押すと、ここに記録されます。あなたの MyKakeibo! は自分の負担分だけが支出になり、相手の MyKakeibo! には相手の負担分が「waripoから自動登録」として、同じカテゴリーで入ります。
         </p>
       </section>
       <button className="btn btn-ghost phone-only" onClick={logout}>ログアウト</button>
