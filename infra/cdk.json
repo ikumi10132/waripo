@@ -1,0 +1,7 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "context": {
+    "domainName": "waripo.wakalabo.net",
+    "certificateArn": "arn:aws:acm:us-east-1:812114845293:certificate/94f56607-8149-4eb5-8919-c692e96a23d0"
+  }
+}

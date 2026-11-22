@@ -1,0 +1,201 @@
+// データの読み書き
+//
+// waripo のテーブル:
+//   PK              SK                      内容
+//   USER#<sub>      PAIR                    その人が入っているペアの id
+//   PAIR#<id>       META                    ペア (2 人) の情報
+//   PAIR#<id>       ENTRY#<日付>#<id>        割り勘・精算・最初の残高の記録
+//
+// 家計簿 (kakeibo) のテーブル: 割り勘にした明細に印を付け、相手の家計簿に負担分の明細を作る
+//   USER#<sub>      TX#<日付>#<id>          明細 (kakeibo の形のまま)
+import { randomUUID } from 'node:crypto';
+import { CognitoIdentityProviderClient, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import {
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
+import type { Entry, KakeiboSplit, Member, Pair } from './types.js';
+
+const TABLE = process.env.TABLE_NAME ?? 'waripo';
+const KAKEIBO_TABLE = process.env.KAKEIBO_TABLE ?? 'kakeibo';
+const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
+
+const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
+const cognito = new CognitoIdentityProviderClient({});
+
+export const shortId = () => randomUUID().replace(/-/g, '').slice(0, 12);
+const strip = <T>(item: Record<string, unknown>): T => {
+  const { PK: _pk, SK: _sk, ...rest } = item;
+  return rest as T;
+};
+
+// ---------- W-SSO のユーザー ----------
+
+async function findUser(filter: string): Promise<Member | undefined> {
+  const res = await cognito.send(new ListUsersCommand({ UserPoolId: USER_POOL_ID, Filter: filter, Limit: 1 }));
+  const u = res.Users?.[0];
+  const attr = (n: string) => u?.Attributes?.find((a) => a.Name === n)?.Value;
+  const sub = attr('sub');
+  const email = attr('email');
+  return sub && email ? { sub, email } : undefined;
+}
+
+const quote = (s: string) => `"${s.replace(/["\\]/g, '')}"`;
+export const userByEmail = (email: string) => findUser(`email = ${quote(email.toLowerCase())}`);
+export const userBySub = (sub: string) => findUser(`sub = ${quote(sub)}`);
+
+// ---------- ペア ----------
+
+export async function pairOf(sub: string): Promise<Pair | null> {
+  const link = await doc.send(new GetCommand({ TableName: TABLE, Key: { PK: `USER#${sub}`, SK: 'PAIR' } }));
+  const pairId = link.Item?.pairId as string | undefined;
+  if (!pairId) return null;
+  const res = await doc.send(new GetCommand({ TableName: TABLE, Key: { PK: `PAIR#${pairId}`, SK: 'META' } }));
+  return res.Item ? strip<Pair>(res.Item) : null;
+}
+
+/** 2 人のペアを作る。どちらかがすでにペアに入っていたら失敗する */
+export async function createPair(a: Member, b: Member): Promise<Pair> {
+  const pair: Pair = { id: shortId(), members: [a, b], createdAt: new Date().toISOString() };
+  await doc.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        { Put: { TableName: TABLE, Item: { PK: `PAIR#${pair.id}`, SK: 'META', ...pair } } },
+        ...[a, b].map((m) => ({
+          Put: {
+            TableName: TABLE,
+            Item: { PK: `USER#${m.sub}`, SK: 'PAIR', pairId: pair.id },
+            ConditionExpression: 'attribute_not_exists(PK)',
+          },
+        })),
+      ],
+    }),
+  );
+  return pair;
+}
+
+// ---------- 記録 ----------
+
+const entrySk = (id: string) => {
+  const [date, rand] = id.split('_');
+  if (!date || !rand) throw new Error('記録の id が不正です');
+  return `ENTRY#${date}#${rand}`;
+};
+
+export async function listEntries(pairId: string): Promise<Entry[]> {
+  const items: Record<string, unknown>[] = [];
+  let start: Record<string, unknown> | undefined;
+  do {
+    const res = await doc.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': `PAIR#${pairId}`, ':sk': 'ENTRY#' },
+        ExclusiveStartKey: start,
+      }),
+    );
+    items.push(...(res.Items ?? []));
+    start = res.LastEvaluatedKey;
+  } while (start);
+  return items.map((i) => strip<Entry>(i)).sort((a, b) => (a.id < b.id ? 1 : -1));
+}
+
+export async function getEntry(pairId: string, id: string): Promise<Entry | undefined> {
+  const res = await doc.send(new GetCommand({ TableName: TABLE, Key: { PK: `PAIR#${pairId}`, SK: entrySk(id) } }));
+  return res.Item ? strip<Entry>(res.Item) : undefined;
+}
+
+export async function putEntry(pairId: string, e: Entry): Promise<void> {
+  await doc.send(new PutCommand({ TableName: TABLE, Item: { PK: `PAIR#${pairId}`, SK: entrySk(e.id), ...e } }));
+}
+
+export async function deleteEntry(pairId: string, id: string): Promise<void> {
+  await doc.send(new DeleteCommand({ TableName: TABLE, Key: { PK: `PAIR#${pairId}`, SK: entrySk(id) } }));
+}
+
+// ---------- 家計簿 (kakeibo のテーブル) ----------
+
+export interface KakeiboTx {
+  id: string;
+  date: string;
+  type: 'expense' | 'income';
+  amount: number;
+  categoryId: string | null;
+  payment: string;
+  merchant: string;
+  memo: string;
+  source: string;
+  confirmed: boolean;
+  advance?: boolean;
+  received?: number | null;
+  split?: KakeiboSplit;
+  createdAt: string;
+}
+
+const txKey = (sub: string, id: string) => {
+  const [date, rand] = id.split('_');
+  if (!date || !rand) throw new Error('家計簿の明細の id が不正です');
+  return { PK: `USER#${sub}`, SK: `TX#${date}#${rand}` };
+};
+
+export async function getKakeiboTx(sub: string, id: string): Promise<KakeiboTx | undefined> {
+  const res = await doc.send(new GetCommand({ TableName: KAKEIBO_TABLE, Key: txKey(sub, id) }));
+  return res.Item ? strip<KakeiboTx>(res.Item) : undefined;
+}
+
+export async function hasKakeiboCategory(sub: string, categoryId: string): Promise<boolean> {
+  const res = await doc.send(new GetCommand({ TableName: KAKEIBO_TABLE, Key: { PK: `USER#${sub}`, SK: `CAT#${categoryId}` } }));
+  return !!res.Item;
+}
+
+/** waripo から家計簿に明細を作る (「未確認」に入り、本人がカテゴリーを確かめる) */
+export async function createKakeiboTx(
+  sub: string,
+  t: Pick<KakeiboTx, 'date' | 'amount' | 'categoryId' | 'merchant' | 'split'>,
+): Promise<string> {
+  const id = `${t.date}_${shortId()}`;
+  const tx: KakeiboTx = {
+    id,
+    date: t.date,
+    type: 'expense',
+    amount: t.amount,
+    categoryId: t.categoryId,
+    payment: 'other',
+    merchant: t.merchant,
+    memo: 'waripoから自動登録',
+    source: 'waripo',
+    confirmed: false,
+    split: t.split,
+    createdAt: new Date().toISOString(),
+  };
+  await doc.send(new PutCommand({ TableName: KAKEIBO_TABLE, Item: { ...txKey(sub, id), ...tx } }));
+  return id;
+}
+
+/** 家計簿の明細に割り勘の印を付ける (null で外す)。明細がなければ何もしない */
+export async function setKakeiboSplit(sub: string, id: string, split: KakeiboSplit | null): Promise<void> {
+  await doc
+    .send(
+      new UpdateCommand({
+        TableName: KAKEIBO_TABLE,
+        Key: txKey(sub, id),
+        ConditionExpression: 'attribute_exists(PK)',
+        ...(split
+          ? { UpdateExpression: 'SET #s = :s', ExpressionAttributeNames: { '#s': 'split' }, ExpressionAttributeValues: { ':s': split } }
+          : { UpdateExpression: 'REMOVE #s', ExpressionAttributeNames: { '#s': 'split' } }),
+      }),
+    )
+    .catch((e: Error) => {
+      if (e.name !== 'ConditionalCheckFailedException') throw e; // 明細が消されていた・日付が変わっていた
+    });
+}
+
+export async function deleteKakeiboTx(sub: string, id: string): Promise<void> {
+  await doc.send(new DeleteCommand({ TableName: KAKEIBO_TABLE, Key: txKey(sub, id) }));
+}

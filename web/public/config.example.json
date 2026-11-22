@@ -1,0 +1,6 @@
+{
+  "apiUrl": "/api",
+  "ssoUrl": "https://apps.wakalabo.net",
+  "wssoClientId": "xxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "region": "ap-southeast-2"
+}
