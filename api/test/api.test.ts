@@ -228,3 +228,20 @@ test('割り勘のカテゴリーを相手の家計簿にも付ける (同じ名
   assert.equal(theirTx(r4.body.id).categoryId, null);
   assert.equal(theirTx(r4.body.id).confirmed, false);
 });
+
+test('予期しないエラーでは、AWS の内部の情報を画面に返さない', async () => {
+  await pair();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const proto = DynamoDBDocumentClient.prototype as any;
+  const original = proto.send;
+  proto.send = async () => {
+    throw Object.assign(new Error('User: arn:aws:sts::123:assumed-role/x is not authorized to perform: dynamodb:Query'), { name: 'AccessDeniedException' });
+  };
+  try {
+    const r = await call<{ message: string }>('GET /api/summary');
+    assert.equal(r.status, 500);
+    assert.ok(!r.body.message.includes('arn:'));
+  } finally {
+    proto.send = original;
+  }
+});

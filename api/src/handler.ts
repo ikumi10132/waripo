@@ -248,7 +248,8 @@ export async function handler(event: APIGatewayProxyEventV2WithJWTAuthorizer): P
     return await route(event, me);
   } catch (e) {
     if (e instanceof HttpError) return json(e.status, { message: e.message });
+    // AWS の内部の情報 (ARN など) を画面に出さない。詳細は CloudWatch Logs に残る
     console.error(e);
-    return json(500, { message: e instanceof Error ? e.message : 'エラーが発生しました' });
+    return json(500, { message: 'waripo でエラーが発生しました。時間をおいてもう一度お試しください' });
   }
 }

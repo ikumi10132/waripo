@@ -72,10 +72,11 @@ export class WaripoStack extends cdk.Stack {
       logGroup: new logs.LogGroup(this, 'ApiLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.DESTROY }),
     });
     table.grantReadWriteData(fn);
-    // 家計簿: 割り勘にした明細に印を付け、相手の家計簿に負担分を作る (明細とカテゴリーの読み書きだけ)
+    // 家計簿: 割り勘にした明細に印を付け、相手の家計簿に負担分を作る (明細とカテゴリーの読み書きだけ)。
+    // Query は相手のカテゴリーの一覧を読むため (同じ名前のカテゴリーを探す)
     fn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
         resources: [kakeiboTableArn],
       }),
     );
