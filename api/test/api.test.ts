@@ -20,7 +20,7 @@ const tbl = (name: string) => {
 const key = (k: { PK: unknown; SK: unknown }) => `${k.PK}|${k.SK}`;
 
 const USERS = [
-  { sub: 'me', email: 'i.sakumoto@example.com' },
+  { sub: 'me', email: 'alice@example.com' },
   { sub: 'pt', email: 'partner@example.com' },
   { sub: 'x3', email: 'third@example.com' },
 ];
@@ -104,11 +104,11 @@ test('権限とペアの登録', async () => {
   assert.equal((await call('GET /api/summary', { groups: '[admin]' })).status, 200);
   assert.equal((await call('POST /api/entries', { body: { type: 'settle', amount: 1, direction: 'toMe' } })).status, 400); // ペアがまだない
   assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'nobody@example.com' } })).status, 404);
-  assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'i.sakumoto@example.com' } })).status, 400);
+  assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'alice@example.com' } })).status, 400);
   assert.equal((await pair()).status, 201);
   assert.equal((await call('POST /api/pair', { as: 'x3', body: { partnerEmail: 'partner@example.com' } })).status, 400); // 相手は別のペア
   const s = await call<Summary>('GET /api/summary', { as: 'pt' });
-  assert.equal(s.body.partner?.email, 'i.sakumoto@example.com'); // 相手からも自分が見える
+  assert.equal(s.body.partner?.email, 'alice@example.com'); // 相手からも自分が見える
 });
 
 test('家計簿の明細から割り勘: 自分の明細に印、相手の家計簿に負担分 (未確認・メモ付き)、削除で元に戻る', async () => {
