@@ -11,6 +11,10 @@ export interface Pair {
   id: string;
   members: Member[];
   createdAt: string;
+  /** pending: 申し込み中 (相手の承認待ち)。ないときは成立済み (承認制にする前に作ったペア) */
+  status?: 'pending' | 'active';
+  /** 申し込んだ人の sub (pending のとき) */
+  requestedBy?: string;
 }
 
 /**
@@ -52,8 +56,10 @@ export interface Entry {
 export interface Summary {
   me: Member;
   pair: Pair | null;
-  /** 相手 (2 人なので 1 人) */
+  /** 相手 (2 人なので 1 人)。ペアが成立していないときは null */
   partner: Member | null;
+  /** 申し込み中のペア。byMe: 自分が申し込んだ (相手の承認待ち) / false: 相手から届いている */
+  request: { partner: Member; byMe: boolean } | null;
   /** 正なら相手が自分に借りている、負なら自分が相手に借りている (円) */
   balance: number;
   entries: Entry[];

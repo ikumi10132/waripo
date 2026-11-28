@@ -69,6 +69,7 @@ async function notifyPartner(c: Ctx, entry: Entry): Promise<void> {
 async function requirePair(me: string): Promise<Ctx> {
   const pair = await db.pairOf(me);
   if (!pair) throw new HttpError(400, '先に割り勘の相手を登録してください');
+  if (pair.status === 'pending') throw new HttpError(400, 'ペアがまだ成立していません (相手の承認待ち)');
   const partner = pair.members.find((m) => m.sub !== me);
   if (!partner) throw new HttpError(500, 'ペアの情報が壊れています');
   return { me, pair, partner };
@@ -203,11 +204,15 @@ async function route(event: APIGatewayProxyEventV2WithJWTAuthorizer, me: string)
     case 'GET /api/summary': {
       const pair = await db.pairOf(me);
       const meMember = pair?.members.find((m) => m.sub === me) ?? (await db.userBySub(me)) ?? { sub: me, email: '' };
-      const entries = pair ? await db.listEntries(pair.id) : [];
+      const other = pair?.members.find((m) => m.sub !== me) ?? null;
+      // 申し込み中は「相手」として扱わない (MyKakeibo! の画面も partner を見て割り勘を出すため)
+      const active = !!pair && pair.status !== 'pending';
+      const entries = active ? await db.listEntries(pair.id) : [];
       const res: Summary = {
         me: meMember,
         pair,
-        partner: pair?.members.find((m) => m.sub !== me) ?? null,
+        partner: active ? other : null,
+        request: pair && !active && other ? { partner: other, byMe: pair.requestedBy === me } : null,
         balance: balanceFor(me, entries),
         entries,
       };
@@ -219,7 +224,10 @@ async function route(event: APIGatewayProxyEventV2WithJWTAuthorizer, me: string)
       const email = str(parseBody(event).partnerEmail, 254).toLowerCase();
       if (!EMAIL_RE.test(email)) throw new HttpError(400, '相手のメールアドレスを正しく入力してください');
       const partner = await db.userByEmail(email);
-      if (!partner) throw new HttpError(404, 'そのメールアドレスの W-SSO アカウントがありません。ダッシュボードで追加してください');
+      // アカウントがない人と、waripo を使えない人は区別しない (誰のアカウントがあるかを探れないように)
+      if (!partner || (partner.sub !== me && !(await db.canUseWaripo(partner.sub)))) {
+        throw new HttpError(404, 'そのメールアドレスの人は waripo を使えません。ダッシュボード (apps.wakalabo.net) で waripo を使えるようにしてください');
+      }
       if (partner.sub === me) throw new HttpError(400, '自分自身とはペアになれません');
       if (await db.pairOf(partner.sub)) throw new HttpError(400, '相手はすでに別の人とペアになっています');
       const self = await db.userBySub(me);
@@ -230,6 +238,22 @@ async function route(event: APIGatewayProxyEventV2WithJWTAuthorizer, me: string)
         if ((e as Error).name === 'TransactionCanceledException') throw new HttpError(409, 'どちらかがすでにペアになっています');
         throw e;
       }
+    }
+
+    case 'POST /api/pair/accept': {
+      const pair = await db.pairOf(me);
+      if (!pair || pair.status !== 'pending') throw new HttpError(400, '承認する申し込みがありません');
+      if (pair.requestedBy === me) throw new HttpError(400, '自分の申し込みは承認できません。相手の承認を待ってください');
+      await db.activatePair(pair.id);
+      return json(200, { ok: true });
+    }
+
+    case 'DELETE /api/pair': {
+      // 申し込みの取り消し (申し込んだ人) と、断る (申し込まれた人)。成立したペアは消せない
+      const pair = await db.pairOf(me);
+      if (!pair || pair.status !== 'pending') throw new HttpError(400, '取り消せる申し込みがありません');
+      await db.deletePendingPair(pair);
+      return json(200, { ok: true });
     }
 
     case 'POST /api/entries': {

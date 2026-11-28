@@ -9,7 +9,7 @@
 // 家計簿 (kakeibo) のテーブル: 割り勘にした明細に印を付け、相手の家計簿に負担分の明細を作る
 //   USER#<sub>      TX#<日付>#<id>          明細 (kakeibo の形のまま)
 import { randomUUID } from 'node:crypto';
-import { CognitoIdentityProviderClient, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
+import { AdminListGroupsForUserCommand, CognitoIdentityProviderClient, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DeleteCommand,
@@ -50,6 +50,16 @@ const quote = (s: string) => `"${s.replace(/["\\]/g, '')}"`;
 export const userByEmail = (email: string) => findUser(`email = ${quote(email.toLowerCase())}`);
 export const userBySub = (sub: string) => findUser(`sub = ${quote(sub)}`);
 
+/** waripo を使える人か (止められておらず、admin か app-waripo のグループに入っている) */
+export async function canUseWaripo(sub: string): Promise<boolean> {
+  const res = await cognito.send(new ListUsersCommand({ UserPoolId: USER_POOL_ID, Filter: `sub = ${quote(sub)}`, Limit: 1 }));
+  const u = res.Users?.[0];
+  if (!u?.Username || u.Enabled === false) return false;
+  const groups = await cognito.send(new AdminListGroupsForUserCommand({ UserPoolId: USER_POOL_ID, Username: u.Username, Limit: 60 }));
+  const names = (groups.Groups ?? []).map((g) => g.GroupName);
+  return names.includes('admin') || names.includes('app-waripo');
+}
+
 // ---------- ペア ----------
 
 export async function pairOf(sub: string): Promise<Pair | null> {
@@ -60,9 +70,9 @@ export async function pairOf(sub: string): Promise<Pair | null> {
   return res.Item ? strip<Pair>(res.Item) : null;
 }
 
-/** 2 人のペアを作る。どちらかがすでにペアに入っていたら失敗する */
+/** ペアを申し込む (a が b に)。b が承認するまでは記録できない。どちらかがすでにペア (申し込み中を含む) に入っていたら失敗する */
 export async function createPair(a: Member, b: Member): Promise<Pair> {
-  const pair: Pair = { id: shortId(), members: [a, b], createdAt: new Date().toISOString() };
+  const pair: Pair = { id: shortId(), members: [a, b], createdAt: new Date().toISOString(), status: 'pending', requestedBy: a.sub };
   await doc.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -78,6 +88,40 @@ export async function createPair(a: Member, b: Member): Promise<Pair> {
     }),
   );
   return pair;
+}
+
+/** 申し込みを承認してペアを成立させる */
+export async function activatePair(pairId: string): Promise<void> {
+  await doc.send(
+    new UpdateCommand({
+      TableName: TABLE,
+      Key: { PK: `PAIR#${pairId}`, SK: 'META' },
+      UpdateExpression: 'SET #s = :active REMOVE requestedBy',
+      ConditionExpression: '#s = :pending',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: { ':active': 'active', ':pending': 'pending' },
+    }),
+  );
+}
+
+/** 申し込みを取り消す・断る (成立したペアは消さない) */
+export async function deletePendingPair(pair: Pair): Promise<void> {
+  await doc.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Delete: {
+            TableName: TABLE,
+            Key: { PK: `PAIR#${pair.id}`, SK: 'META' },
+            ConditionExpression: '#s = :pending',
+            ExpressionAttributeNames: { '#s': 'status' },
+            ExpressionAttributeValues: { ':pending': 'pending' },
+          },
+        },
+        ...pair.members.map((m) => ({ Delete: { TableName: TABLE, Key: { PK: `USER#${m.sub}`, SK: 'PAIR' } } })),
+      ],
+    }),
+  );
 }
 
 // ---------- 記録 ----------

@@ -433,3 +433,6 @@ textarea.input { line-height: 1.6; resize: vertical; }
 @supports not (aspect-ratio: 1 / 1) {
   .cal-day { min-height: 48px; }
 }
+
+/* 横に並べるボタン (ペアの承認・断る) */
+.btn-row { display: flex; flex-wrap: wrap; gap: 10px; }

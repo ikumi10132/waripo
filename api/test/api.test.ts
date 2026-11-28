@@ -20,16 +20,20 @@ const tbl = (name: string) => {
 const key = (k: { PK: unknown; SK: unknown }) => `${k.PK}|${k.SK}`;
 
 const USERS = [
-  { sub: 'me', email: 'alice@example.com' },
-  { sub: 'pt', email: 'partner@example.com' },
-  { sub: 'x3', email: 'third@example.com' },
+  { sub: 'me', email: 'alice@example.com', groups: ['app-waripo'] },
+  { sub: 'pt', email: 'partner@example.com', groups: ['app-waripo'] },
+  { sub: 'x3', email: 'third@example.com', groups: ['admin'] },
+  { sub: 'kb', email: 'kakeibo-only@example.com', groups: ['app-kakeibo'] },
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(CognitoIdentityProviderClient.prototype as any).send = async (cmd: { input: { Filter: string } }) => {
+(CognitoIdentityProviderClient.prototype as any).send = async (cmd: { constructor: { name: string }; input: { Filter: string; Username: string } }) => {
+  if (cmd.constructor.name === 'AdminListGroupsForUserCommand') {
+    return { Groups: (USERS.find((x) => x.sub === cmd.input.Username)?.groups ?? []).map((GroupName) => ({ GroupName })) };
+  }
   const [, field, value] = cmd.input.Filter.match(/^(\w+) = "(.*)"$/)!;
   const u = USERS.find((x) => (field === 'email' ? x.email === value : x.sub === value));
-  return { Users: u ? [{ Attributes: [{ Name: 'sub', Value: u.sub }, { Name: 'email', Value: u.email }] }] : [] };
+  return { Users: u ? [{ Username: u.sub, Enabled: true, Attributes: [{ Name: 'sub', Value: u.sub }, { Name: 'email', Value: u.email }] }] : [] };
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -48,7 +52,11 @@ const USERS = [
     case 'UpdateCommand': {
       const it = t!.get(key(i.Key));
       if (!it) throw new ConditionalCheckFailedException({ message: 'x', $metadata: {} });
-      if (i.UpdateExpression.startsWith('SET')) it.split = i.ExpressionAttributeValues[':s'];
+      if (i.UpdateExpression.includes('#s = :active')) {
+        if (it.status !== 'pending') throw new ConditionalCheckFailedException({ message: 'x', $metadata: {} });
+        it.status = 'active';
+        delete it.requestedBy;
+      } else if (i.UpdateExpression.startsWith('SET')) it.split = i.ExpressionAttributeValues[':s'];
       else delete it.split;
       return {};
     }
@@ -58,13 +66,15 @@ const USERS = [
       return { Items: [...t!.values()].filter((x) => x.PK === pk && x.SK.startsWith(sk)).map((x) => structuredClone(x)) };
     }
     case 'TransactWriteCommand': {
+      const cancel = () => Object.assign(new Error('cancel'), { name: 'TransactionCanceledException' });
       for (const ti of i.TransactItems) {
-        const p = ti.Put;
-        if (p.ConditionExpression && tbl(p.TableName).has(key(p.Item))) {
-          throw Object.assign(new Error('cancel'), { name: 'TransactionCanceledException' });
-        }
+        if (ti.Put?.ConditionExpression && tbl(ti.Put.TableName).has(key(ti.Put.Item))) throw cancel();
+        if (ti.Delete?.ConditionExpression && tbl(ti.Delete.TableName).get(key(ti.Delete.Key))?.status !== 'pending') throw cancel();
       }
-      for (const ti of i.TransactItems) tbl(ti.Put.TableName).set(key(ti.Put.Item), structuredClone(ti.Put.Item));
+      for (const ti of i.TransactItems) {
+        if (ti.Put) tbl(ti.Put.TableName).set(key(ti.Put.Item), structuredClone(ti.Put.Item));
+        if (ti.Delete) tbl(ti.Delete.TableName).delete(key(ti.Delete.Key));
+      }
       return {};
     }
     default:
@@ -94,7 +104,12 @@ const tx = (sub: string, rand: string, categoryId: string | null) =>
     categoryId, merchant: '店', memo: '', source: 'manual', confirmed: true, payment: 'applepay', createdAt: '',
   });
 const theirTx = (entryId: string) => [...kakeibo().values()].find((x) => x.PK === 'USER#pt' && (x.split as { entryId?: string } | undefined)?.entryId === entryId)!;
-const pair = () => call('POST /api/pair', { body: { partnerEmail: 'Partner@Example.com' } });
+/** 自分が申し込み、相手が承認してペアにする */
+const pair = async () => {
+  const r = await call('POST /api/pair', { body: { partnerEmail: 'Partner@Example.com' } });
+  if (r.status === 201) await call('POST /api/pair/accept', { as: 'pt' });
+  return r;
+};
 
 beforeEach(() => tables.clear());
 
@@ -113,6 +128,8 @@ test('権限とペアの登録', async () => {
   assert.equal((await call('GET /api/summary', { groups: '[admin]' })).status, 200);
   assert.equal((await call('POST /api/entries', { body: { type: 'settle', amount: 1, direction: 'toMe' } })).status, 400); // ペアがまだない
   assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'nobody@example.com' } })).status, 404);
+  // waripo を使えない人とはペアになれない (アカウントがない人と同じ答えにする)
+  assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'kakeibo-only@example.com' } })).status, 404);
   assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'alice@example.com' } })).status, 400);
   assert.equal((await pair()).status, 201);
   assert.equal((await call('POST /api/pair', { as: 'x3', body: { partnerEmail: 'partner@example.com' } })).status, 400); // 相手は別のペア
@@ -278,4 +295,32 @@ test('割り勘にすると、相手の iPhone に通知する (相手が通知�
   tx('me', 'n2', null);
   await call('POST /api/entries', { body: { type: 'split', kakeiboTxId: '2026-11-14_n2' } });
   assert.equal(sent.length, 2);
+});
+
+test('ペアは申し込み → 相手の承認で成立する。承認までは記録できず、相手としても見えない', async () => {
+  assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'partner@example.com' } })).status, 201);
+  const mine = await call<Summary>('GET /api/summary');
+  assert.equal(mine.body.partner, null);
+  assert.deepEqual(mine.body.request, { partner: { sub: 'pt', email: 'partner@example.com' }, byMe: true });
+  const theirs = await call<Summary>('GET /api/summary', { as: 'pt' });
+  assert.equal(theirs.body.partner, null); // MyKakeibo! の画面も、承認までは割り勘を出さない
+  assert.equal(theirs.body.request?.byMe, false);
+  // 承認前は記録できない (相手の MyKakeibo! に書き込めない)
+  assert.equal((await call('POST /api/entries', { body: { type: 'settle', amount: 100, direction: 'toMe' } })).status, 400);
+  assert.equal((await call('POST /api/pair/accept')).status, 400); // 自分の申し込みは自分で承認できない
+  assert.equal((await call('POST /api/pair/accept', { as: 'x3' })).status, 400); // 関係ない人も承認できない
+  assert.equal((await call('POST /api/pair/accept', { as: 'pt' })).status, 200);
+  assert.equal((await call<Summary>('GET /api/summary')).body.partner?.email, 'partner@example.com');
+  assert.equal((await call('DELETE /api/pair')).status, 400); // 成立したペアは消せない
+  assert.equal((await call('POST /api/entries', { body: { type: 'settle', amount: 100, direction: 'toMe' } })).status, 201);
+});
+
+test('申し込みは、申し込んだ人が取り消せ、相手は断れる', async () => {
+  await call('POST /api/pair', { body: { partnerEmail: 'partner@example.com' } });
+  assert.equal((await call('DELETE /api/pair')).status, 200);
+  assert.equal((await call<Summary>('GET /api/summary', { as: 'pt' })).body.request, null);
+  await call('POST /api/pair', { body: { partnerEmail: 'partner@example.com' } });
+  assert.equal((await call('DELETE /api/pair', { as: 'pt' })).status, 200);
+  assert.equal((await call<Summary>('GET /api/summary')).body.request, null);
+  assert.equal((await call('POST /api/pair', { body: { partnerEmail: 'partner@example.com' } })).status, 201); // 申し込み直せる
 });

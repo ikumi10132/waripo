@@ -42,6 +42,8 @@ export interface TransferInput {
 export const api = {
   summary: () => call<Summary>('/summary'),
   createPair: (partnerEmail: string) => send<Pair>('POST', '/pair', { partnerEmail }),
+  acceptPair: () => send<{ ok: true }>('POST', '/pair/accept'),
+  cancelPair: () => send<{ ok: true }>('DELETE', '/pair'),
   addEntry: (input: SplitInput | TransferInput) => send<Entry>('POST', '/entries', input),
   deleteEntry: (id: string) => send<{ ok: true }>('DELETE', `/entries/${encodeURIComponent(id)}`),
 };

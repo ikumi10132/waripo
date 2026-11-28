@@ -121,7 +121,7 @@ function Main({ onAuthError }: { onAuthError: () => void }) {
 
       <main className="main">
         {!data && <p className="muted center-text">読み込み中…</p>}
-        {data && !data.partner && <Setup onDone={done} onError={handleError} />}
+        {data && !data.partner && <Setup request={data.request} onDone={done} onError={handleError} />}
         {data?.partner && tab === 'home' && <Home data={data} onModal={setModal} />}
         {data?.partner && tab === 'settings' && <Settings data={data} onModal={setModal} />}
       </main>
@@ -271,33 +271,70 @@ function EntryDetail({ data, entry: e, onClose, onDone, onError }: {
   );
 }
 
-/** 最初に 1 回: 割り勘の相手を登録する */
-function Setup({ onDone, onError }: { onDone: (m: string) => void; onError: (e: unknown) => void }) {
+/**
+ * 最初に 1 回: 割り勘の相手を登録する。
+ * どちらかが申し込み、相手が承認するとペアになる (相手の MyKakeibo! に記録を書くので、相手の同意を取る)
+ */
+function Setup({ request, onDone, onError }: { request: Summary['request']; onDone: (m: string) => void; onError: (e: unknown) => void }) {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
-  const submit = async (ev: FormEvent) => {
-    ev.preventDefault();
+  const run = async (fn: () => Promise<unknown>, message: string) => {
     setBusy(true);
     try {
-      await api.createPair(email.trim());
-      onDone('相手を登録しました');
+      await fn();
+      onDone(message);
     } catch (err) {
       onError(err);
+    } finally {
       setBusy(false);
     }
   };
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault();
+    void run(() => api.createPair(email.trim()), '申し込みました。相手が承認するとペアになります');
+  };
+
+  if (request?.byMe) {
+    return (
+      <>
+        <header className="page-head"><h1 className="page-title">はじめに</h1></header>
+        <section className="card">
+          <h2 className="card-title">相手の承認待ち</h2>
+          <p className="small">{request.partner.email} に割り勘のペアを申し込みました。相手が waripo を開いて「承認する」を押すと、使えるようになります。</p>
+          <button className="btn btn-outline" disabled={busy} onClick={() => void run(api.cancelPair, '申し込みを取り消しました')}>申し込みを取り消す</button>
+        </section>
+      </>
+    );
+  }
+  if (request) {
+    return (
+      <>
+        <header className="page-head"><h1 className="page-title">はじめに</h1></header>
+        <section className="card">
+          <h2 className="card-title">ペアの申し込みが届いています</h2>
+          <p className="small">
+            {request.partner.email} から、割り勘のペアの申し込みが届いています。承認すると、割り勘の記録をお互いに付けられるようになり、相手が割り勘にした負担分はあなたの MyKakeibo! にも自動で入ります。
+          </p>
+          <div className="btn-row">
+            <button className="btn btn-primary" disabled={busy} onClick={() => void run(api.acceptPair, 'ペアになりました')}>承認する</button>
+            <button className="btn btn-outline" disabled={busy} onClick={() => void run(api.cancelPair, '申し込みを断りました')}>断る</button>
+          </div>
+        </section>
+      </>
+    );
+  }
   return (
     <>
       <header className="page-head"><h1 className="page-title">はじめに</h1></header>
       <section className="card">
         <h2 className="card-title">割り勘の相手を登録</h2>
-        <p className="small">相手の W-SSO のメールアドレスを入れてください。登録は 2 人のうちどちらか 1 回だけで、相手の画面にも自動で反映されます。</p>
+        <p className="small">相手の W-SSO のメールアドレスを入れて申し込んでください。相手が waripo を開いて承認すると、ペアになります。</p>
         <form className="admin-form" onSubmit={submit}>
           <label className="field">
             <span>相手のメールアドレス</span>
             <input className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </label>
-          <button className="btn btn-primary" disabled={busy}>登録する</button>
+          <button className="btn btn-primary" disabled={busy}>申し込む</button>
         </form>
       </section>
     </>

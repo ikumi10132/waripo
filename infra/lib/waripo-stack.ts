@@ -101,7 +101,8 @@ export class WaripoStack extends cdk.Stack {
     // W-SSO: 相手をメールアドレスで探す (読み取りのみ)
     fn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['cognito-idp:ListUsers'],
+        // ペアの相手探しと、相手が waripo を使えるか (グループ) の確認
+        actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminListGroupsForUser'],
         resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${wssoPoolId}`],
       }),
     );
@@ -130,7 +131,8 @@ export class WaripoStack extends cdk.Stack {
     const integration = new HttpLambdaIntegration('ApiIntegration', fn);
     const { GET, POST, DELETE } = apigw.HttpMethod;
     api.addRoutes({ path: '/api/summary', methods: [GET], integration });
-    api.addRoutes({ path: '/api/pair', methods: [POST], integration });
+    api.addRoutes({ path: '/api/pair', methods: [POST, DELETE], integration });
+    api.addRoutes({ path: '/api/pair/accept', methods: [POST], integration });
     api.addRoutes({ path: '/api/entries', methods: [POST], integration });
     api.addRoutes({ path: '/api/entries/{id}', methods: [DELETE], integration });
     const stage = api.defaultStage?.node.defaultChild as apigw.CfnStage;
