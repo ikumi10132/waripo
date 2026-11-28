@@ -6,6 +6,8 @@ export interface AppConfig {
   ssoUrl: string;
   wssoClientId: string;
   region: string;
+  /** 画面のログの送り先 (wakalabo-apps の POST /events) */
+  logUrl?: string;
 }
 
 let config: AppConfig | undefined;
