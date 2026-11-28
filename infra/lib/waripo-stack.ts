@@ -38,6 +38,12 @@ const ACCESS_LOG_FORMAT = JSON.stringify({
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const LOCAL_DEV_URL = 'http://localhost:5173';
+/**
+ * ローカル開発 (npm run dev) の画面からの呼び出し。本番では許可せず、
+ * `npx cdk deploy -c localDev=true` でデプロイしたときだけ許可する
+ */
+const devOrigins = (scope: Construct): string[] =>
+  [true, 'true'].includes(scope.node.tryGetContext('localDev')) ? [LOCAL_DEV_URL] : [];
 /** 家計簿から waripo の API を呼ぶので、家計簿のオリジンも許可する */
 const KAKEIBO_ORIGINS = ['https://kakeibo.wakalabo.net'];
 
@@ -123,7 +129,7 @@ export class WaripoStack extends cdk.Stack {
     const api = new apigw.HttpApi(this, 'HttpApi', {
       defaultAuthorizer: authorizer,
       corsPreflight: {
-        allowOrigins: [...KAKEIBO_ORIGINS, LOCAL_DEV_URL, ...(props.domainName ? [`https://${props.domainName}`] : [])],
+        allowOrigins: [...KAKEIBO_ORIGINS, ...devOrigins(this), ...(props.domainName ? [`https://${props.domainName}`] : [])],
         allowMethods: [apigw.CorsHttpMethod.GET, apigw.CorsHttpMethod.POST, apigw.CorsHttpMethod.DELETE],
         allowHeaders: ['authorization', 'content-type'],
         maxAge: cdk.Duration.hours(1),
