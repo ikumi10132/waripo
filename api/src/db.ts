@@ -135,6 +135,8 @@ export interface KakeiboTx {
   advance?: boolean;
   received?: number | null;
   split?: KakeiboSplit;
+  /** 分割払いの回 (割り勘にはできない) */
+  installment?: { planId: string; index: number; count: number };
   createdAt: string;
 }
 

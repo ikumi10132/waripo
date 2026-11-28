@@ -87,6 +87,7 @@ async function createSplit(c: Ctx, b: Record<string, unknown>): Promise<Entry> {
     if (!tx) throw new HttpError(404, 'MyKakeibo! の明細が見つかりません');
     if (tx.type !== 'expense') throw new HttpError(400, '支出の明細だけ割り勘にできます');
     if (tx.split) throw new HttpError(400, 'この明細はすでに割り勘にしています');
+    if (tx.installment) throw new HttpError(400, '分割払いの明細は割り勘にできません');
     if (tx.advance) throw new HttpError(400, '立て替えの明細は割り勘にできません。立て替えをオフにしてから割り勘にしてください');
     const share = b.share === undefined || b.share === '' ? halfShare(tx.amount) : yenOf(b.share, true);
     if (share > tx.amount) throw new HttpError(400, '相手の負担が支払った金額を超えています');
