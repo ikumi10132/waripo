@@ -3,9 +3,10 @@ import type { Entry, Summary } from '../../api/src/types';
 import { api, AuthError } from './api';
 import { IconApps, IconGear, IconHome, IconLogout, IconPlus, IconScale } from './components/Icons';
 import { InitialForm, SettleForm, SplitForm } from './components/Forms';
-import { loadConfig } from './config';
+import { getConfig, loadConfig } from './config';
 import { dateLabel, effectFor, monthLabel, myShare, nameOf, yen } from './util';
-import { handleRedirect, isLoggedIn, login, logout } from './wsso-client';
+import { handleRedirect, isLoggedIn, login, logout, getAccessToken } from './wsso-client';
+import { initLog, logView } from './wakalabo-log';
 
 type Phase = { name: 'loading' } | { name: 'login' } | { name: 'ready' } | { name: 'error'; message: string };
 
@@ -48,8 +49,14 @@ export function App() {
 type Tab = 'home' | 'settings';
 type Modal = null | 'split' | 'settle' | 'initial' | { entry: Entry };
 
+/** ログに出す画面の名前 */
+const SCREEN_NAMES: Record<Tab, string> = { home: 'ホーム', settings: '設定' };
+
 function Main({ onAuthError }: { onAuthError: () => void }) {
   const [tab, setTab] = useState<Tab>('home');
+  // 共通のログ (どの画面を開いたか・画面のエラー)。apps.wakalabo.net の「ログ」で見られる
+  useEffect(() => initLog({ url: getConfig().logUrl, app: 'waripo', getToken: getAccessToken }), []);
+  useEffect(() => logView(SCREEN_NAMES[tab]), [tab]);
   const [data, setData] = useState<Summary | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [toastMsg, setToastMsg] = useState<{ text: string; error?: boolean } | null>(null);
